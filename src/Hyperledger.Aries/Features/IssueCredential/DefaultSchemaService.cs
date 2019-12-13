@@ -14,6 +14,7 @@ using Hyperledger.Aries.Configuration;
 using Hyperledger.Aries.Ledger;
 using Hyperledger.Aries.Payments;
 using Hyperledger.Aries.Storage;
+using System.Linq;
 
 namespace Hyperledger.Aries.Features.IssueCredential
 {
@@ -96,27 +97,26 @@ namespace Hyperledger.Aries.Features.IssueCredential
         }
 
         /// <inheritdoc />
-        public async Task<string> LookupSchemaFromCredentialDefinitionAsync(Pool pool,
+        public async Task<SchemaRecord> LookupSchemaFromCredentialDefinitionAsync(IAgentContext agentContext,
             string credentialDefinitionId)
         {
-            var credDef = await LookupCredentialDefinitionAsync(pool, credentialDefinitionId);
+            var credDef = await LookupCredentialDefinitionAsync(agentContext, credentialDefinitionId);
 
-            if (string.IsNullOrEmpty(credDef))
+            if (credDef == null)
                 return null;
 
             try
             {
-                var schemaSequenceId = Convert.ToInt32(JObject.Parse(credDef)["schemaId"].ToString());
-                return await LookupSchemaAsync(pool, schemaSequenceId);
+                int schemaSequenceId = Convert.ToInt32(credDef.SchemaId);
+                return await LookupSchemaAsync(await agentContext.Pool, schemaSequenceId);
             }
             catch (Exception) { }
 
             return null;
         }
 
-        /// TODO this should return a schema object
         /// <inheritdoc />
-        public virtual async Task<string> LookupSchemaAsync(Pool pool, int sequenceId)
+        public virtual async Task<SchemaRecord> LookupSchemaAsync(Pool pool, int sequenceId)
         {
             var result = await LedgerService.LookupTransactionAsync(pool, null, sequenceId);
 
@@ -135,7 +135,7 @@ namespace Hyperledger.Aries.Features.IssueCredential
                     txnData.Add("ver", ver);
                     txnData.Add("seqNo", sequenceId);
 
-                    return txnData.ToString();
+                    return ParseSchemaJson(txnData);
                 }
                 catch (Exception) { }
             }
@@ -143,12 +143,39 @@ namespace Hyperledger.Aries.Features.IssueCredential
             return null;
         }
 
-        /// TODO this should return a schema object
         /// <inheritdoc />
-        public virtual async Task<string> LookupSchemaAsync(Pool pool, string schemaId)
+        public virtual async Task<SchemaRecord> LookupSchemaAsync(Pool pool, string schemaId)
         {
             var result = await LedgerService.LookupSchemaAsync(pool, schemaId);
-            return result?.ObjectJson;
+            return ParseSchemaJson(result?.ObjectJson);
+        }
+
+        /// <inheritdoc />
+        public virtual async Task<SchemaRecord> GetSchemaAsync(IAgentContext agentContext, string schemaId, bool storeLocallyIfFoundOnLedger)
+        {
+            SchemaRecord schemaRecord;
+
+            try
+            {
+                schemaRecord = await RecordService.GetAsync<SchemaRecord>(agentContext.Wallet, schemaId);
+            }
+            catch (AriesFrameworkException afe) when (afe.ErrorCode == ErrorCode.RecordNotFound)
+            {
+                // ignore record not found
+                schemaRecord = null;
+            }
+
+            if (schemaRecord == null)
+            {
+                var result = await LedgerService.LookupSchemaAsync(await agentContext.Pool, schemaId);
+                if (result?.ObjectJson != null)
+                    schemaRecord = ParseSchemaJson(result?.ObjectJson);
+
+                if (schemaRecord != null && storeLocallyIfFoundOnLedger)
+                    await RecordService.AddAsync(agentContext.Wallet, schemaRecord);
+            }
+
+            return schemaRecord;
         }
 
         /// <inheritdoc />
@@ -247,12 +274,25 @@ namespace Hyperledger.Aries.Features.IssueCredential
                 tailsBaseUri: provisioning.TailsBaseUri != null ? new Uri(provisioning.TailsBaseUri) : null);
         }
 
-        /// TODO this should return a definition object
         /// <inheritdoc />
-        public virtual async Task<string> LookupCredentialDefinitionAsync(Pool pool, string definitionId)
+        public virtual async Task<DefinitionRecord> LookupCredentialDefinitionAsync(IAgentContext agentContext, string definitionId)
         {
-            var result = await LedgerService.LookupDefinitionAsync(pool, definitionId);
-            return result?.ObjectJson;
+            DefinitionRecord definitionRecord;
+            try
+            {
+                definitionRecord = await RecordService.GetAsync<DefinitionRecord>(agentContext.Wallet, definitionId);
+            }
+            catch (AriesFrameworkException afe) when (afe.ErrorCode == ErrorCode.RecordNotFound)
+            {
+                definitionRecord = null;
+            }
+
+            if (definitionRecord == null)
+            {
+                var result = await LedgerService.LookupDefinitionAsync(await agentContext.Pool, definitionId);
+                definitionRecord = ParseDefinitionJson(result?.ObjectJson);
+            }
+            return definitionRecord;
         }
 
         /// <inheritdoc />
@@ -262,5 +302,44 @@ namespace Hyperledger.Aries.Features.IssueCredential
         /// <inheritdoc />
         public virtual Task<DefinitionRecord> GetCredentialDefinitionAsync(Wallet wallet, string credentialDefinitionId) =>
             RecordService.GetAsync<DefinitionRecord>(wallet, credentialDefinitionId);
+        
+
+        private static SchemaRecord ParseSchemaJson(string schemaJson)
+        {
+            JObject obj = JObject.Parse(schemaJson);
+            return ParseSchemaJson(obj);
+        }
+
+        private static SchemaRecord ParseSchemaJson(JObject obj)
+        {
+            IEnumerable<string> attrNames = obj["attrNames"].Values<string>();
+
+            SchemaRecord record = new SchemaRecord()
+            {
+                AttributeNames = attrNames.ToArray(),
+                Id = obj["id"]?.Value<string>(),
+                Name = obj["name"]?.Value<string>(),
+                Version = obj["ver"]?.Value<string>(),
+                SequenceNumber = obj["seqNo"].Value<int?>()
+            };
+            return record;
+        }
+
+        private static DefinitionRecord ParseDefinitionJson(string schemaJson)
+        {
+            JObject obj = JObject.Parse(schemaJson);
+            return ParseDefinitionJson(obj);
+        }
+
+        private static DefinitionRecord ParseDefinitionJson(JObject obj)
+        {
+            DefinitionRecord record = new DefinitionRecord()
+            {
+                Id = obj["id"]?.Value<string>(),
+                SupportsRevocation = obj["value"]["primary"]["revocation"].HasValues,
+                SchemaId = obj["schemaId"].Value<string>()
+            };
+            return record;
+        }
     }
 }

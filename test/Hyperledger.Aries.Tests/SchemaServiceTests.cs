@@ -30,9 +30,9 @@ namespace Hyperledger.Aries.Tests
             //Resolve it from the ledger with its identifier
             var resultSchema = await schemaService.LookupSchemaAsync(await Context.Pool, schemaId);
 
-            var resultSchemaName = JObject.Parse(resultSchema)["name"].ToString();
-            var resultSchemaVersion = JObject.Parse(resultSchema)["version"].ToString();
-            var sequenceId = Convert.ToInt32(JObject.Parse(resultSchema)["seqNo"].ToString());
+            var resultSchemaName = resultSchema.Name;
+            var resultSchemaVersion = resultSchema.Version;
+            var sequenceId = resultSchema.SequenceNumber ?? 0;
 
             Assert.Equal(schemaName, resultSchemaName);
             Assert.Equal(schemaVersion, resultSchemaVersion);
@@ -40,8 +40,8 @@ namespace Hyperledger.Aries.Tests
             //Resolve it from the ledger with its sequence Id
             var secondResultSchema = await schemaService.LookupSchemaAsync(await Context.Pool, sequenceId);
 
-            var secondResultSchemaName = JObject.Parse(secondResultSchema)["name"].ToString();
-            var secondResultSchemaVersion = JObject.Parse(secondResultSchema)["version"].ToString();
+            var secondResultSchemaName = secondResultSchema.Name;
+            var secondResultSchemaVersion = secondResultSchema.Version;
 
             Assert.Equal(schemaName, secondResultSchemaName);
             Assert.Equal(schemaVersion, secondResultSchemaVersion);
@@ -69,16 +69,16 @@ namespace Hyperledger.Aries.Tests
                 record.IssuerDid, "Tag", false, 100, new Uri("http://mock/tails"));
 
             var credDef =
-                await schemaService.LookupCredentialDefinitionAsync(await Context.Pool, credId);
+                await schemaService.LookupCredentialDefinitionAsync(Context, credId);
 
-            var resultCredId = JObject.Parse(credDef)["id"].ToString();
+            var resultCredId = credDef.Id;
 
             Assert.Equal(credId, resultCredId);
 
-            var result = await schemaService.LookupSchemaFromCredentialDefinitionAsync(await Context.Pool, credId);
+            var result = await schemaService.LookupSchemaFromCredentialDefinitionAsync(Context, credId);
 
-            var resultSchemaName = JObject.Parse(result)["name"].ToString();
-            var resultSchemaVersion = JObject.Parse(result)["version"].ToString();
+            var resultSchemaName = result.Name;
+            var resultSchemaVersion = result.Version;
 
             Assert.Equal(schemaName, resultSchemaName);
             Assert.Equal(schemaVersion, resultSchemaVersion);
